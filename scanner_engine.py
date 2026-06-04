@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ETF Scanner Engine - 核心逻辑模块
-从 etf_scanner.py 提取，供 Streamlit app 和 CLI 脚本共用
+纯技术指标筛选（MACD/RSI/BOLL/均线/成交量）
 """
 
 import os
@@ -45,22 +45,6 @@ CONFIG = {
     "MIN_DAILY_AMOUNT": 1000,
     "MIN_SCALE": 5,
     "TRADE_DAYS_FOR_AVG": 20,
-
-    # ---- CAN SLIM 开关与阈值 ----
-    "C_ENABLED": False,
-    "A_ENABLED": False,
-    "N_ENABLED": True,
-    "S_ENABLED": True,
-    "L_ENABLED": True,
-    "I_ENABLED": False,
-    "M_ENABLED": True,
-
-    "N_NEW_HIGH_MONTHS": 3,
-    "N_SECTOR_RANK_PCT": 0.3,
-    "S_SCALE_MIN": 20,
-    "S_SCALE_MAX": 200,
-    "M_CSI300_MA_WEEKS": 20,
-    "M_CHINEXT_RSI_THRESHOLD": 40,
 
     # ---- 技术面筛选开关 ----
     "MACD_CROSS_ENABLED": True,
@@ -105,9 +89,6 @@ CONFIG = {
 
     "KEEP_KEYWORDS": ["股票", "行业", "宽基", "主题", "策略", "指数"],
     "EXCLUDE_KEYWORDS": ["债券", "商品", "货币", "QDII", "跨境", "黄金", "原油", "白银"],
-
-    "CSI300_CODE": "sh000300",
-    "CHINEXT_CODE": "sz399006",
 }
 
 # 确保目录存在
@@ -233,34 +214,6 @@ def fetch_etf_kline(symbol: str, period: str = "周",
             df = ak.fund_etf_hist_em(
                 symbol=symbol, period=period,
                 start_date=start_date, end_date=end_date, adjust="hfq"
-            )
-            if df is not None and len(df) > 0:
-                df = _normalize_kline_df(df)
-                save_cache(cache_name, df)
-                return df
-        except Exception as e:
-            if retry < CONFIG["MAX_RETRY"]:
-                time.sleep(1)
-    return pd.DataFrame()
-
-
-def fetch_index_kline(symbol: str, period: str = "周") -> pd.DataFrame:
-    if ak is None:
-        raise ImportError("akshare 未安装")
-    cache_name = f"index_{symbol}_{period}_{datetime.now().strftime('%Y%m%d')}"
-    cached = load_cache(cache_name, ttl_hours=CONFIG["CACHE_TTL_HOURS"])
-    if cached is not None:
-        return cached
-
-    start_date = (datetime.now() - timedelta(days=365*3)).strftime("%Y%m%d")
-    end_date = datetime.now().strftime("%Y%m%d")
-
-    for retry in range(CONFIG["MAX_RETRY"] + 1):
-        try:
-            code = symbol.replace("sh", "").replace("sz", "")
-            df = ak.index_zh_a_hist(
-                symbol=code, period=period,
-                start_date=start_date, end_date=end_date,
             )
             if df is not None and len(df) > 0:
                 df = _normalize_kline_df(df)
@@ -522,192 +475,11 @@ def check_monthly_ma(df_monthly: pd.DataFrame) -> dict:
 
 
 # ==================================================================================
-# CAN SLIM 筛选
-# ==================================================================================
-
-# TODO: 待用户补充ETF跟踪指数的季度扣非净利润数据后实现
-def check_canslim_c(etf_info: dict, df_weekly: pd.DataFrame) -> dict:
-    if not CONFIG["C_ENABLED"]:
-        return {"pass": True, "detail": "[占位] C条件已跳过（未启用）", "data": {}}
-    return {"pass": True, "detail": "[占位] C条件待数据源补充", "data": {}}
-
-
-# TODO: 待用户补充ETF跟踪指数的年度净利润数据后实现
-def check_canslim_a(etf_info: dict, df_weekly: pd.DataFrame) -> dict:
-    if not CONFIG["A_ENABLED"]:
-        return {"pass": True, "detail": "[占位] A条件已跳过（未启用）", "data": {}}
-    return {"pass": True, "detail": "[占位] A条件待数据源补充", "data": {}}
-
-
-def check_canslim_n(etf_info: dict, df_weekly: pd.DataFrame,
-                    sector_returns: dict) -> dict:
-    if not CONFIG["N_ENABLED"]:
-        return {"pass": True, "detail": "N条件已关闭", "data": {}}
-    if len(df_weekly) < 12:
-        return {"pass": False, "detail": "N条件：周K数据不足", "data": {}}
-
-    close = df_weekly["close"]
-    n_weeks = CONFIG["N_NEW_HIGH_MONTHS"] * 4
-    if len(close) < n_weeks:
-        return {"pass": False, "detail": "N条件：数据不足", "data": {}}
-
-    recent_high = close.iloc[-n_weeks:].max()
-    curr_close = close.iloc[-1]
-    is_new_high = curr_close >= recent_high * 0.98
-
-    sector = etf_info.get("sector", "其他")
-    sector_pass = True
-    rank_pct = None
-    if sector_returns and sector in sector_returns:
-        sorted_sectors = sorted(sector_returns.items(), key=lambda x: x[1], reverse=True)
-        rank = next((i+1 for i, (s, _) in enumerate(sorted_sectors) if s == sector), len(sorted_sectors))
-        total = len(sorted_sectors)
-        rank_pct = rank / total
-        sector_pass = rank_pct <= CONFIG["N_SECTOR_RANK_PCT"]
-        sector_detail = f"板块排名={rank}/{total}({rank_pct:.0%})"
-    else:
-        sector_detail = "板块数据未知"
-
-    passed = is_new_high and sector_pass
-    detail = f"新高={'是' if is_new_high else '否'} | {sector_detail}"
-    return {"pass": passed, "detail": detail,
-            "data": {"is_new_high": is_new_high, "sector_rank_pct": rank_pct}}
-
-
-def check_canslim_s(etf_info: dict, df_weekly: pd.DataFrame) -> dict:
-    if not CONFIG["S_ENABLED"]:
-        return {"pass": True, "detail": "S条件已关闭", "data": {}}
-
-    scale = etf_info.get("scale_yi", np.nan)
-    details = []
-    scale_pass = True
-    share_growth_pass = True
-
-    if not pd.isna(scale):
-        in_range = CONFIG["S_SCALE_MIN"] <= scale <= CONFIG["S_SCALE_MAX"]
-        scale_pass = in_range
-        details.append(f"规模={scale:.1f}亿({'适中' if in_range else '不在区间'})")
-    else:
-        details.append("规模数据未知")
-
-    shares = etf_info.get("shares", np.nan)
-    if not pd.isna(shares):
-        share_growth_pass = shares > 0
-        details.append(f"份额变化={'正' if share_growth_pass else '负'}")
-    else:
-        details.append("份额数据未知，跳过")
-        share_growth_pass = True
-
-    return {"pass": scale_pass and share_growth_pass, "detail": " | ".join(details), "data": {}}
-
-
-def check_canslim_l(etf_info: dict, df_weekly: pd.DataFrame,
-                    sector_3m_returns: dict, csi300_3m_ret: float) -> dict:
-    if not CONFIG["L_ENABLED"]:
-        return {"pass": True, "detail": "L条件已关闭", "data": {}}
-    if len(df_weekly) < 12:
-        return {"pass": False, "detail": "L条件：数据不足", "data": {}}
-
-    close = df_weekly["close"]
-    etf_3m_ret = (close.iloc[-1] / close.iloc[-12] - 1) * 100 if len(close) >= 12 else 0
-
-    sector = etf_info.get("sector", "其他")
-    sector_pass = True
-    etf_vs_sector_pass = True
-
-    if sector_3m_returns and sector in sector_3m_returns:
-        sector_ret = sector_3m_returns[sector]
-        sector_pass = sector_ret > csi300_3m_ret
-        sector_detail = f"板块3月={sector_ret:.1f}% vs 沪深300={csi300_3m_ret:.1f}%"
-        sector_avg = sector_3m_returns[sector]
-        etf_vs_sector_pass = etf_3m_ret > sector_avg
-    else:
-        sector_detail = "板块涨幅数据未知"
-
-    passed = sector_pass and etf_vs_sector_pass
-    detail = f"{sector_detail} | ETF3月={etf_3m_ret:.1f}%"
-    return {"pass": passed, "detail": detail, "data": {"etf_3m_ret": round(etf_3m_ret, 2)}}
-
-
-# TODO: 待用户补充ETF机构持仓数据后实现
-def check_canslim_i(etf_info: dict, df_weekly: pd.DataFrame) -> dict:
-    if not CONFIG["I_ENABLED"]:
-        return {"pass": True, "detail": "[占位] I条件已跳过（未启用）", "data": {}}
-    return {"pass": True, "detail": "[占位] I条件待数据源补充", "data": {}}
-
-
-def check_canslim_m(csi300_weekly: pd.DataFrame,
-                    chinext_weekly: pd.DataFrame) -> dict:
-    if not CONFIG["M_ENABLED"]:
-        return {"pass": True, "detail": "M条件已关闭", "data": {}}
-
-    results = {}
-
-    if len(csi300_weekly) >= CONFIG["M_CSI300_MA_WEEKS"]:
-        close = csi300_weekly["close"]
-        ma20 = calc_ma(close, CONFIG["M_CSI300_MA_WEEKS"])
-        curr_close = close.iloc[-1]
-        curr_ma20 = ma20.iloc[-1]
-        csi_pass = curr_close > curr_ma20 if not pd.isna(curr_ma20) else True
-        results["csi300"] = {
-            "pass": csi_pass,
-            "detail": f"沪深300={'%.0f' % curr_close} vs MA{CONFIG['M_CSI300_MA_WEEKS']}={'%.0f' % curr_ma20}({'多头' if csi_pass else '空头'})"
-        }
-    else:
-        results["csi300"] = {"pass": True, "detail": "沪深300数据不足"}
-
-    if len(chinext_weekly) >= CONFIG["RSI_PERIOD"] + 1:
-        rsi = calc_rsi(chinext_weekly["close"])
-        curr_rsi = rsi.iloc[-1]
-        cn_pass = curr_rsi > CONFIG["M_CHINEXT_RSI_THRESHOLD"]
-        results["chinext"] = {
-            "pass": cn_pass,
-            "detail": f"创业板RSI={curr_rsi:.1f}({'正常' if cn_pass else '低迷'})"
-        }
-    else:
-        results["chinext"] = {"pass": True, "detail": "创业板数据不足"}
-
-    all_pass = all(r["pass"] for r in results.values())
-    detail = " | ".join(r["detail"] for r in results.values())
-    return {"pass": all_pass, "detail": detail, "data": results}
-
-
-# ==================================================================================
-# 板块涨幅计算
-# ==================================================================================
-def calc_sector_returns(etf_list_df: pd.DataFrame, kline_cache: dict,
-                        weeks: int = 4) -> dict:
-    sector_returns = {}
-    sector_counts = {}
-    for _, row in etf_list_df.iterrows():
-        code = str(row.get("code", ""))
-        sector = row.get("sector", "其他")
-        if code in kline_cache and len(kline_cache[code]) >= weeks:
-            close = kline_cache[code]["close"]
-            ret = (close.iloc[-1] / close.iloc[-weeks] - 1) * 100
-            if sector not in sector_returns:
-                sector_returns[sector] = 0
-                sector_counts[sector] = 0
-            sector_returns[sector] += ret
-            sector_counts[sector] += 1
-    for sector in sector_returns:
-        if sector_counts[sector] > 0:
-            sector_returns[sector] /= sector_counts[sector]
-    return sector_returns
-
-
-def calc_sector_3m_returns(etf_list_df: pd.DataFrame, kline_cache: dict) -> dict:
-    return calc_sector_returns(etf_list_df, kline_cache, weeks=12)
-
-
-# ==================================================================================
-# 主筛选流程（供 Streamlit 调用）
+# 主筛选流程（纯技术面）
 # ==================================================================================
 def run_scan_engine(config_override: dict = None, progress_callback=None):
     """
-    执行完整筛选流程，返回结果字典
-    config_override: 临时覆盖CONFIG中的参数
-    progress_callback: 进度回调函数 callback(step_name, current, total)
+    执行纯技术面筛选流程，返回结果字典
     """
     cfg = CONFIG.copy()
     if config_override:
@@ -716,15 +488,9 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
     results = {
         "passed_etfs": [],
         "stats": {},
-        "m_result": {},
         "etf_filtered": pd.DataFrame(),
         "weekly_cache": {},
         "monthly_cache": {},
-        "sector_1m_returns": {},
-        "sector_3m_returns": {},
-        "csi300_weekly": pd.DataFrame(),
-        "chinext_weekly": pd.DataFrame(),
-        "csi300_3m_ret": 0,
         "log": [],
     }
 
@@ -778,38 +544,10 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
     results["weekly_cache"] = weekly_cache
     results["monthly_cache"] = monthly_cache
 
-    # 步骤4：获取指数数据
-    progress("获取指数数据", 0, 1)
-    csi300_weekly = fetch_index_kline(cfg["CSI300_CODE"], period="周")
-    chinext_weekly = fetch_index_kline(cfg["CHINEXT_CODE"], period="周")
-    results["csi300_weekly"] = csi300_weekly
-    results["chinext_weekly"] = chinext_weekly
-
-    csi300_3m_ret = 0
-    if len(csi300_weekly) >= 12:
-        c = csi300_weekly["close"]
-        csi300_3m_ret = (c.iloc[-1] / c.iloc[-12] - 1) * 100
-    results["csi300_3m_ret"] = csi300_3m_ret
-    log(f"沪深300近3月涨幅：{csi300_3m_ret:.2f}%")
-
-    # 步骤5：板块涨幅
-    progress("计算板块涨幅", 0, 1)
-    sector_1m = calc_sector_returns(etf_filtered, weekly_cache, weeks=4)
-    sector_3m = calc_sector_3m_returns(etf_filtered, weekly_cache)
-    results["sector_1m_returns"] = sector_1m
-    results["sector_3m_returns"] = sector_3m
-
-    # 步骤6：M条件
-    progress("大盘方向判断", 0, 1)
-    m_result = check_canslim_m(csi300_weekly, chinext_weekly)
-    results["m_result"] = m_result
-    log(f"M条件：{m_result['detail']}")
-
-    # 步骤7：逐只筛选
+    # 步骤4：逐只筛选（纯技术面）
     passed_etfs = []
     stats = {"total": len(weekly_cache), "macd_pass": 0, "volume_pass": 0,
-             "rsi_pass": 0, "boll_pass": 0, "monthly_pass": 0,
-             "canslim_pass": 0, "final_pass": 0}
+             "rsi_pass": 0, "boll_pass": 0, "monthly_pass": 0, "final_pass": 0}
 
     all_codes = list(weekly_cache.keys())
     for i, code in enumerate(all_codes):
@@ -856,34 +594,13 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
                 stats["boll_pass"] += 1
                 reasons.append("站上BOLL中轨")
 
-            # 月K
+            # 月K趋势
             if cfg["MONTHLY_MA_ENABLED"] and len(mk) > 0:
                 r = check_monthly_ma(mk)
                 if not r["pass"]: continue
                 stats["monthly_pass"] += 1
                 reasons.append("月K趋势向上")
 
-            # CAN SLIM
-            c_r = check_canslim_c(etf_info, wk)
-            if not c_r["pass"]: continue
-            a_r = check_canslim_a(etf_info, wk)
-            if not a_r["pass"]: continue
-            n_r = check_canslim_n(etf_info, wk, sector_1m)
-            if not n_r["pass"]: continue
-            reasons.append("N:新高/板块强")
-            s_r = check_canslim_s(etf_info, wk)
-            if not s_r["pass"]: continue
-            reasons.append("S:供需良好")
-            l_r = check_canslim_l(etf_info, wk, sector_3m, csi300_3m_ret)
-            if not l_r["pass"]: continue
-            reasons.append("L:领涨")
-            i_r = check_canslim_i(etf_info, wk)
-            if not i_r["pass"]: continue
-
-            if not m_result["pass"]:
-                reasons.append("M:大盘偏空")
-
-            stats["canslim_pass"] += 1
             stats["final_pass"] += 1
 
             close = wk["close"]
@@ -918,9 +635,7 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
 # ==================================================================================
 def run_backtest_engine(start_date: str, end_date: str,
                         config_override: dict = None, progress_callback=None) -> dict:
-    """
-    回测引擎，返回回测结果字典
-    """
+    """回测引擎，基于纯技术面信号"""
     cfg = CONFIG.copy()
     if config_override:
         cfg.update(config_override)

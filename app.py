@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Streamlit ETF Scanner - 大A改良版CAN SLIM ETF筛选器可视化界面
+Streamlit ETF Scanner - 纯技术指标ETF筛选器可视化界面
 运行：streamlit run app.py
 """
 
@@ -16,12 +16,12 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
 from scanner_engine import (
-    CONFIG, fetch_etf_list, fetch_etf_kline, fetch_index_kline,
+    CONFIG, fetch_etf_list, fetch_etf_kline,
     pre_filter_etf_list, classify_sector,
     calc_macd, calc_rsi, calc_boll, calc_ma, calc_ema,
     check_weekly_macd_golden_cross, check_weekly_volume,
     check_weekly_rsi, check_weekly_boll, check_monthly_ma,
-    check_canslim_m, run_scan_engine, run_backtest_engine,
+    run_scan_engine, run_backtest_engine,
     cleanup_cache, load_cache, save_cache,
 )
 
@@ -35,7 +35,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 自定义CSS
 st.markdown("""
 <style>
     .stMetric {background-color: #f0f2f6; padding: 15px; border-radius: 10px;}
@@ -49,7 +48,6 @@ st.markdown("""
 # 侧边栏：参数配置
 # ==================================================================================
 def render_sidebar():
-    """渲染侧边栏参数配置"""
     st.sidebar.title("  参数配置")
     st.sidebar.markdown("---")
 
@@ -72,27 +70,8 @@ def render_sidebar():
 
     st.sidebar.markdown("---")
 
-    # ---- CAN SLIM 开关 ----
-    st.sidebar.subheader("  CAN SLIM 条件")
-    n_enabled = st.sidebar.checkbox("N: 新高/板块强", CONFIG["N_ENABLED"])
-    s_enabled = st.sidebar.checkbox("S: 供需关系", CONFIG["S_ENABLED"])
-    l_enabled = st.sidebar.checkbox("L: 领涨领跌", CONFIG["L_ENABLED"])
-    m_enabled = st.sidebar.checkbox("M: 市场方向", CONFIG["M_ENABLED"])
-    c_enabled = st.sidebar.checkbox("C: 当季盈利 [占位]", CONFIG["C_ENABLED"])
-    a_enabled = st.sidebar.checkbox("A: 年度盈利 [占位]", CONFIG["A_ENABLED"])
-    i_enabled = st.sidebar.checkbox("I: 机构认同 [占位]", CONFIG["I_ENABLED"])
-
-    if c_enabled:
-        st.sidebar.warning("C条件需要补充季度盈利数据")
-    if a_enabled:
-        st.sidebar.warning("A条件需要补充年度盈利数据")
-    if i_enabled:
-        st.sidebar.warning("I条件需要补充机构持仓数据")
-
-    st.sidebar.markdown("---")
-
     # ---- 技术面开关 ----
-    st.sidebar.subheader("  技术面开关")
+    st.sidebar.subheader("  技术面筛选开关")
     macd_cross = st.sidebar.checkbox("MACD金叉", CONFIG["MACD_CROSS_ENABLED"])
     volume_filter = st.sidebar.checkbox("放量确认", CONFIG["VOLUME_FILTER_ENABLED"])
     rsi_filter = st.sidebar.checkbox("RSI多头", CONFIG["RSI_FILTER_ENABLED"])
@@ -100,28 +79,13 @@ def render_sidebar():
     monthly_ma = st.sidebar.checkbox("月K趋势", CONFIG["MONTHLY_MA_ENABLED"])
     macd_above_zero = st.sidebar.checkbox("过滤水下金叉", CONFIG["MACD_ABOVE_ZERO_FILTER"])
 
-    st.sidebar.markdown("---")
-
-    # ---- N条件参数 ----
-    n_new_high_months = st.sidebar.slider("N: 近N月新高", 1, 6, CONFIG["N_NEW_HIGH_MONTHS"])
-    n_sector_rank = st.sidebar.slider("N: 板块排名前%", 10, 50, int(CONFIG["N_SECTOR_RANK_PCT"] * 100))
-
-    # ---- S条件参数 ----
-    s_scale_min = st.sidebar.number_input("S: 最小规模(亿)", 5, 100, CONFIG["S_SCALE_MIN"])
-    s_scale_max = st.sidebar.number_input("S: 最大规模(亿)", 50, 500, CONFIG["S_SCALE_MAX"])
-
     config_override = {
         "MACD_FAST": macd_fast, "MACD_SLOW": macd_slow, "MACD_SIGNAL": macd_signal,
         "RSI_PERIOD": rsi_period, "BOLL_PERIOD": boll_period, "BOLL_STD": boll_std,
         "MIN_DAILY_AMOUNT": min_amount, "MIN_SCALE": min_scale, "VOLUME_RATIO": volume_ratio,
-        "N_ENABLED": n_enabled, "S_ENABLED": s_enabled, "L_ENABLED": l_enabled,
-        "M_ENABLED": m_enabled, "C_ENABLED": c_enabled, "A_ENABLED": a_enabled,
-        "I_ENABLED": i_enabled,
         "MACD_CROSS_ENABLED": macd_cross, "VOLUME_FILTER_ENABLED": volume_filter,
         "RSI_FILTER_ENABLED": rsi_filter, "BOLL_FILTER_ENABLED": boll_filter,
         "MONTHLY_MA_ENABLED": monthly_ma, "MACD_ABOVE_ZERO_FILTER": macd_above_zero,
-        "N_NEW_HIGH_MONTHS": n_new_high_months, "N_SECTOR_RANK_PCT": n_sector_rank / 100,
-        "S_SCALE_MIN": s_scale_min, "S_SCALE_MAX": s_scale_max,
     }
     return config_override
 
@@ -132,7 +96,6 @@ def render_sidebar():
 def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
                                 show_macd: bool = True, show_rsi: bool = True,
                                 show_boll: bool = True, show_volume: bool = True) -> go.Figure:
-    """绘制K线图 + MACD + RSI + BOLL 副图"""
     if df is None or len(df) == 0:
         return go.Figure()
 
@@ -141,8 +104,7 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
     rsi = calc_rsi(close)
     boll_mid, boll_upper, boll_lower = calc_boll(close)
 
-    # 确定子图数量
-    subplot_count = 1  # K线
+    subplot_count = 1
     row_heights = [0.5]
     if show_volume and "volume" in df.columns:
         subplot_count += 1
@@ -153,14 +115,10 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
     if show_rsi:
         subplot_count += 1
         row_heights.append(0.1)
-    if show_boll:
-        pass  # BOLL 叠加在K线上
 
-    # 归一化高度
     total = sum(row_heights)
     row_heights = [h / total for h in row_heights]
 
-    row = 1
     specs = [[{"secondary_y": False}]]
     if show_volume and "volume" in df.columns:
         specs.append([{"secondary_y": False}])
@@ -171,11 +129,9 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
 
     fig = make_subplots(
         rows=subplot_count, cols=1, shared_xaxes=True,
-        vertical_spacing=0.03, row_heights=row_heights,
-        specs=specs,
+        vertical_spacing=0.03, row_heights=row_heights, specs=specs,
     )
 
-    # K线蜡烛图
     colors_up = '#ef5350'
     colors_down = '#26a69a'
 
@@ -187,7 +143,6 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
         name="K线",
     ), row=1, col=1)
 
-    # BOLL叠加
     if show_boll:
         fig.add_trace(go.Scatter(x=df["date"], y=boll_mid, name="BOLL中轨",
                                   line=dict(color="orange", width=1)), row=1, col=1)
@@ -197,7 +152,6 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
                                   line=dict(color="gray", width=1, dash="dot"),
                                   fill="tonexty", fillcolor="rgba(128,128,128,0.1)"), row=1, col=1)
 
-    # MA叠加
     if len(close) >= 20:
         ma20 = calc_ma(close, 20)
         fig.add_trace(go.Scatter(x=df["date"], y=ma20, name="MA20",
@@ -209,7 +163,6 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
 
     current_row = 1
 
-    # 成交量
     if show_volume and "volume" in df.columns:
         current_row += 1
         vol_colors = [colors_up if c >= o else colors_down
@@ -218,7 +171,6 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
                               marker_color=vol_colors, showlegend=False),
                       row=current_row, col=1)
 
-    # MACD
     if show_macd:
         current_row += 1
         macd_colors = [colors_up if v >= 0 else colors_down for v in macd_bar]
@@ -232,7 +184,6 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
                                   line=dict(color="yellow", width=1.5)),
                       row=current_row, col=1)
 
-    # RSI
     if show_rsi:
         current_row += 1
         fig.add_trace(go.Scatter(x=df["date"], y=rsi, name="RSI",
@@ -244,10 +195,8 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
         fig.add_hline(y=30, line_dash="dot", line_color="green", row=current_row, col=1)
 
     fig.update_layout(
-        title=title,
-        height=600 + (subplot_count - 1) * 100,
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark",
+        title=title, height=600 + (subplot_count - 1) * 100,
+        xaxis_rangeslider_visible=False, template="plotly_dark",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=50, r=20, t=60, b=30),
     )
@@ -255,30 +204,21 @@ def plot_kline_with_indicators(df: pd.DataFrame, title: str = "K线图",
 
 
 def plot_sector_pie(sector_counts: dict) -> go.Figure:
-    """板块分布饼图"""
     fig = go.Figure(data=[go.Pie(
         labels=list(sector_counts.keys()),
         values=list(sector_counts.values()),
-        hole=0.4,
-        textinfo="label+percent",
+        hole=0.4, textinfo="label+percent",
     )])
-    fig.update_layout(
-        title="入选ETF板块分布",
-        template="plotly_dark",
-        height=400,
-        margin=dict(l=20, r=20, t=40, b=20),
-    )
+    fig.update_layout(title="入选ETF板块分布", template="plotly_dark",
+                      height=400, margin=dict(l=20, r=20, t=40, b=20))
     return fig
 
 
 def plot_return_bar(df: pd.DataFrame) -> go.Figure:
-    """涨幅柱状图"""
     if df is None or len(df) == 0:
         return go.Figure()
-
     df_sorted = df.sort_values("ret_1m", ascending=True)
     colors = ['#ef5350' if v >= 0 else '#26a69a' for v in df_sorted["ret_1m"]]
-
     fig = go.Figure()
     fig.add_trace(go.Bar(
         y=df_sorted["name"], x=df_sorted["ret_1m"],
@@ -286,48 +226,34 @@ def plot_return_bar(df: pd.DataFrame) -> go.Figure:
         marker_color=colors, text=df_sorted["ret_1m"].apply(lambda x: f"{x:.1f}%"),
         textposition="outside",
     ))
-    fig.update_layout(
-        title="入选ETF近1月涨幅排名",
-        template="plotly_dark",
-        height=max(300, len(df_sorted) * 35),
-        xaxis_title="涨幅%",
-        margin=dict(l=150, r=20, t=40, b=30),
-    )
+    fig.update_layout(title="入选ETF近1月涨幅排名", template="plotly_dark",
+                      height=max(300, len(df_sorted) * 35),
+                      xaxis_title="涨幅%", margin=dict(l=150, r=20, t=40, b=30))
     return fig
 
 
 def plot_backtest_results(trades_df: pd.DataFrame) -> go.Figure:
-    """回测收益分布图"""
     if trades_df is None or len(trades_df) == 0:
         return go.Figure()
-
     fig = make_subplots(rows=2, cols=2,
                         subplot_titles=("持有1周收益分布", "持有2周收益分布",
                                         "持有4周收益分布", "收益曲线"))
-
     for i, (col, title) in enumerate([("ret_1周", "1周"), ("ret_2周", "2周"), ("ret_4周", "4周")]):
         if col in trades_df.columns:
             valid = trades_df[col].dropna()
             if len(valid) > 0:
                 row = 1 if i < 2 else 2
                 c = 1 if i % 2 == 0 else 2
-                colors = ['#ef5350' if v >= 0 else '#26a69a' for v in valid]
                 fig.add_trace(go.Histogram(x=valid, name=title, nbinsx=30,
-                                           marker_color='#1f77b4'),
-                              row=row, col=c)
-
-    # 收益曲线（累计平均收益）
+                                           marker_color='#1f77b4'), row=row, col=c)
     if "signal_date" in trades_df.columns and "ret_1周" in trades_df.columns:
         daily = trades_df.groupby("signal_date")["ret_1周"].mean().sort_index()
         cumulative = daily.cumsum()
         fig.add_trace(go.Scatter(x=cumulative.index, y=cumulative.values,
                                   name="累计收益%", line=dict(color="#ff7f0e", width=2)),
                       row=2, col=2)
-
-    fig.update_layout(
-        template="plotly_dark", height=600,
-        showlegend=False, margin=dict(l=50, r=20, t=50, b=30),
-    )
+    fig.update_layout(template="plotly_dark", height=600, showlegend=False,
+                      margin=dict(l=50, r=20, t=50, b=30))
     return fig
 
 
@@ -341,11 +267,10 @@ def tab_results(config_override):
     with col1:
         run_btn = st.button("  开始筛选", type="primary", use_container_width=True)
     with col2:
-        st.caption("点击运行完整CAN SLIM + 技术面筛选流程")
+        st.caption("点击运行纯技术面筛选流程（MACD + 放量 + RSI + BOLL + 月K趋势）")
 
     if run_btn:
         progress_bar = st.progress(0, text="准备开始筛选...")
-        status_text = st.empty()
 
         def progress_cb(step, cur, total):
             pct = cur / max(total, 1)
@@ -357,22 +282,18 @@ def tab_results(config_override):
         progress_bar.progress(1.0, text="筛选完成！")
         st.session_state["scan_result"] = result
 
-    # 显示结果
     if "scan_result" in st.session_state:
         result = st.session_state["scan_result"]
         passed = result["passed_etfs"]
         stats = result["stats"]
-        m_result = result["m_result"]
 
-        # 统计指标
         st.subheader("  筛选统计")
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("参与筛选", stats.get("total", 0))
         c2.metric("MACD通过", stats.get("macd_pass", 0))
-        c3.metric("技术面通过", stats.get("canslim_pass", 0))
-        c4.metric("最终入选", stats.get("final_pass", 0))
-        c5.metric("大盘方向", "多头" if m_result.get("pass", False) else "空头",
-                  delta=m_result.get("detail", ""))
+        c3.metric("RSI通过", stats.get("rsi_pass", 0))
+        c4.metric("BOLL通过", stats.get("boll_pass", 0))
+        c5.metric("最终入选", stats.get("final_pass", 0))
 
         st.markdown("---")
 
@@ -383,7 +304,6 @@ def tab_results(config_override):
         result_df = pd.DataFrame(passed)
         result_df = result_df.sort_values("ret_1m", ascending=False)
 
-        # 双栏布局：表格 + 图表
         col_left, col_right = st.columns([3, 2])
 
         with col_left:
@@ -394,30 +314,18 @@ def tab_results(config_override):
             st.dataframe(display_df, use_container_width=True, height=400)
 
         with col_right:
-            # 板块分布饼图
             sector_counts = result_df["sector"].value_counts().to_dict()
             if sector_counts:
                 st.plotly_chart(plot_sector_pie(sector_counts), use_container_width=True)
 
-        # 涨幅柱状图
         st.subheader("  涨幅排名")
         st.plotly_chart(plot_return_bar(result_df), use_container_width=True)
 
-        # 大盘趋势
-        st.markdown("---")
-        st.subheader("  大盘趋势报告")
-        if m_result.get("pass", False):
-            st.success(f"  {m_result.get('detail', '')}")
-        else:
-            st.warning(f"  {m_result.get('detail', '')}")
-
-        # 保存结果
         today = datetime.now().strftime("%Y%m%d")
         csv_path = os.path.join(CONFIG["RESULTS_DIR"], f"筛选结果_{today}.csv")
         result_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
         st.info(f"结果已保存至: {csv_path}")
 
-        # 日志
         with st.expander("  运行日志"):
             for msg in result.get("log", []):
                 st.text(msg)
@@ -429,7 +337,6 @@ def tab_results(config_override):
 def tab_detail():
     st.header("  个股详情")
 
-    # 输入ETF代码
     col1, col2 = st.columns([1, 2])
     with col1:
         code = st.text_input("ETF代码", "159915", max_chars=6)
@@ -452,7 +359,6 @@ def tab_detail():
     if cache_key in st.session_state:
         df = st.session_state[cache_key]
 
-        # 指标选择
         st.subheader("图表配置")
         c1, c2, c3, c4 = st.columns(4)
         show_macd = c1.checkbox("MACD", True)
@@ -460,13 +366,11 @@ def tab_detail():
         show_boll = c3.checkbox("BOLL", True)
         show_volume = c4.checkbox("成交量", True)
 
-        # 绘制图表
         fig = plot_kline_with_indicators(df, title=f"{code} {period}K线",
                                           show_macd=show_macd, show_rsi=show_rsi,
                                           show_boll=show_boll, show_volume=show_volume)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 最新指标数据
         st.subheader("  最新指标值")
         close = df["close"]
         dif, dea, macd_bar = calc_macd(close)
@@ -481,7 +385,6 @@ def tab_detail():
         c5.metric("RSI", f"{rsi.iloc[-1]:.1f}")
         c6.metric("BOLL中轨", f"{boll_mid.iloc[-1]:.3f}")
 
-        # 技术面检查结果
         st.subheader("  技术面检查")
         wk_check = check_weekly_macd_golden_cross(df)
         vol_check = check_weekly_volume(df)
@@ -494,90 +397,16 @@ def tab_detail():
         c3.success(rsi_check["detail"]) if rsi_check["pass"] else c3.warning(rsi_check["detail"])
         c4.success("站上BOLL中轨") if boll_check["pass"] else c4.warning("跌破BOLL中轨")
 
-        # 原始数据
         with st.expander("  原始K线数据"):
             st.dataframe(df.tail(50), use_container_width=True)
 
 
 # ==================================================================================
-# Tab 3: 大盘趋势
-# ==================================================================================
-def tab_market():
-    st.header("  大盘趋势")
-
-    if st.button("加载大盘数据", type="primary"):
-        with st.spinner("正在获取沪深300和创业板指数据..."):
-            try:
-                csi300_w = fetch_index_kline(CONFIG["CSI300_CODE"], period="周")
-                chinext_w = fetch_index_kline(CONFIG["CHINEXT_CODE"], period="周")
-                csi300_m = fetch_index_kline(CONFIG["CSI300_CODE"], period="月")
-                chinext_m = fetch_index_kline(CONFIG["CHINEXT_CODE"], period="月")
-
-                st.session_state["csi300_weekly"] = csi300_w
-                st.session_state["chinext_weekly"] = chinext_w
-                st.session_state["csi300_monthly"] = csi300_m
-                st.session_state["chinext_monthly"] = chinext_m
-
-                st.success("数据加载完成")
-            except Exception as e:
-                st.error(f"获取失败: {e}")
-
-    if "csi300_weekly" in st.session_state:
-        csi300_w = st.session_state["csi300_weekly"]
-        chinext_w = st.session_state["chinext_weekly"]
-
-        # M条件判断
-        m_result = check_canslim_m(csi300_w, chinext_w)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if m_result.get("pass", False):
-                st.success(f"  大盘方向：**偏多**\n\n{m_result['detail']}")
-            else:
-                st.warning(f"  大盘方向：**偏空**\n\n{m_result['detail']}")
-
-        with c2:
-            if len(csi300_w) >= 12:
-                c = csi300_w["close"]
-                ret = (c.iloc[-1] / c.iloc[-12] - 1) * 100
-                st.metric("沪深300近3月涨幅", f"{ret:.2f}%", delta=f"{ret:.1f}%")
-
-        st.markdown("---")
-
-        # 沪深300图表
-        st.subheader("  沪深300 周K线")
-        if len(csi300_w) > 0:
-            fig = plot_kline_with_indicators(csi300_w, title="沪深300 周K线")
-            st.plotly_chart(fig, use_container_width=True)
-
-        # 创业板指图表
-        st.subheader("  创业板指 周K线")
-        if len(chinext_w) > 0:
-            fig = plot_kline_with_indicators(chinext_w, title="创业板指 周K线")
-            st.plotly_chart(fig, use_container_width=True)
-
-        # 板块涨幅排名
-        st.subheader("  板块涨幅排名")
-        if "scan_result" in st.session_state:
-            sector_1m = st.session_state["scan_result"].get("sector_1m_returns", {})
-            sector_3m = st.session_state["scan_result"].get("sector_3m_returns", {})
-            if sector_1m:
-                sector_df = pd.DataFrame([
-                    {"板块": k, "近1月涨幅%": round(v, 2),
-                     "近3月涨幅%": round(sector_3m.get(k, 0), 2)}
-                    for k, v in sorted(sector_1m.items(), key=lambda x: x[1], reverse=True)
-                ])
-                st.dataframe(sector_df, use_container_width=True)
-        else:
-            st.info("请先在「筛选结果」页运行筛选，即可查看板块涨幅排名")
-
-
-# ==================================================================================
-# Tab 4: 回测报告
+# Tab 3: 回测报告
 # ==================================================================================
 def tab_backtest(config_override):
     st.header("  回测报告")
-    st.caption("回测仅基于技术面信号（MACD金叉+放量+RSI），不含基本面筛选")
+    st.caption("回测基于纯技术面信号（MACD金叉+放量+RSI），不含基本面筛选")
 
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
@@ -594,7 +423,6 @@ def tab_backtest(config_override):
         end_str = end_date.strftime("%Y%m%d")
 
         progress_bar = st.progress(0, text="准备回测...")
-        status_text = st.empty()
 
         def progress_cb(step, cur, total):
             pct = cur / max(total, 1)
@@ -617,7 +445,6 @@ def tab_backtest(config_override):
             st.warning("回测期间无信号触发")
             return
 
-        # 统计指标
         st.subheader("  回测统计")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("总信号次数", total)
@@ -631,7 +458,6 @@ def tab_backtest(config_override):
                     [c2, c3, c4][i].metric(f"持有{label}胜率", f"{win_rate:.1f}%",
                                             delta=f"均收益 {avg_ret:.2f}%")
 
-        # 回撤统计
         if "max_drawdown_4w" in trades_df.columns:
             valid_dd = trades_df["max_drawdown_4w"].dropna()
             if len(valid_dd) > 0:
@@ -639,16 +465,13 @@ def tab_backtest(config_override):
 
         st.markdown("---")
 
-        # 图表
         st.subheader("  收益分布")
         fig = plot_backtest_results(trades_df)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 交易明细
         with st.expander("  交易明细"):
             st.dataframe(trades_df, use_container_width=True, height=400)
 
-        # 保存
         csv_path = os.path.join(
             CONFIG["BACKTEST_DIR"],
             f"回测报告_{datetime.now().strftime('%Y%m%d')}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
@@ -661,29 +484,22 @@ def tab_backtest(config_override):
 # 主入口
 # ==================================================================================
 def main():
-    st.title("  大A改良版 CAN SLIM ETF 右侧交易筛选器")
-    st.caption("多周期共振 | 右侧交易 | 纯本地运行")
+    st.title("  多周期共振 ETF 右侧交易筛选器")
+    st.caption("纯技术指标筛选 | MACD + RSI + BOLL + 均线 + 成交量")
 
-    # 侧边栏
     config_override = render_sidebar()
 
-    # 主区域标签页
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "  筛选结果", "  个股详情", "  大盘趋势", "  回测报告"
-    ])
+    tab1, tab2, tab3 = st.tabs(["  筛选结果", "  个股详情", "  回测报告"])
 
     with tab1:
         tab_results(config_override)
     with tab2:
         tab_detail()
     with tab3:
-        tab_market()
-    with tab4:
         tab_backtest(config_override)
 
-    # 页脚
     st.markdown("---")
-    st.caption("CAN SLIM ETF筛选器 v1.0 | 数据源: akshare | 指标参数与同花顺对齐")
+    st.caption("ETF技术面筛选器 v2.0 | 数据源: akshare | 指标参数与同花顺对齐")
 
 
 if __name__ == "__main__":
