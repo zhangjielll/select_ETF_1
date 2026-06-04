@@ -151,13 +151,13 @@ def _normalize_kline_df(df: pd.DataFrame) -> pd.DataFrame:
         cl = c.lower()
         if "日期" in c or "date" in cl:
             col_map[c] = "date"
-        elif "开盘" in c or "open" in cl:
+        elif "开盘" in c or ("open" in cl and "prev" not in cl):
             col_map[c] = "open"
         elif "最高" in c or "high" in cl:
             col_map[c] = "high"
         elif "最低" in c or "low" in cl:
             col_map[c] = "low"
-        elif "收盘" in c or "close" in cl:
+        elif ("收盘" in c or "close" in cl) and "prev" not in cl:
             col_map[c] = "close"
         elif "成交量" in c or "volume" in cl:
             col_map[c] = "volume"
@@ -195,6 +195,41 @@ def fetch_etf_list() -> pd.DataFrame:
     raise RuntimeError("无法获取ETF列表")
 
 
+def _resample_kline(df_daily: pd.DataFrame, period: str) -> pd.DataFrame:
+    """将日K数据重采样为周K或月K"""
+    df = df_daily.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")
+
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in df.columns:
+        agg["volume"] = "sum"
+    if "amount" in df.columns:
+        agg["amount"] = "sum"
+
+    cols = [c for c in agg.keys() if c in df.columns]
+    df = df[cols]
+
+    if period in ("周", "weekly"):
+        resampled = df.resample("W-FRI").agg(agg)
+    elif period in ("月", "monthly"):
+        resampled = df.resample("ME").agg(agg)
+    else:
+        return df_daily
+
+    resampled = resampled.dropna(subset=["close"]).reset_index()
+    return resampled
+
+
+def _symbol_to_sina(symbol: str) -> str:
+    """将ETF代码转换为新浪格式：5开头=sh，1开头=sz"""
+    symbol = str(symbol).strip()
+    if symbol.startswith("5"):
+        return f"sh{symbol}"
+    else:
+        return f"sz{symbol}"
+
+
 def fetch_etf_kline(symbol: str, period: str = "周",
                     start_date: str = None, end_date: str = None) -> pd.DataFrame:
     if ak is None:
@@ -214,6 +249,8 @@ def fetch_etf_kline(symbol: str, period: str = "周",
     if cached is not None:
         return cached
 
+    # 方法1：东方财富接口 fund_etf_hist_em
+    last_error = None
     for retry in range(CONFIG["MAX_RETRY"] + 1):
         try:
             df = ak.fund_etf_hist_em(
@@ -225,8 +262,31 @@ def fetch_etf_kline(symbol: str, period: str = "周",
                 save_cache(cache_name, df)
                 return df
         except Exception as e:
+            last_error = e
+            logger.warning(f"获取 {symbol} {ak_period}K线失败(第{retry+1}次): {e}")
             if retry < CONFIG["MAX_RETRY"]:
                 time.sleep(2)
+
+    # 方法2：新浪接口 fund_etf_hist_sina（仅返回日K，需重采样）
+    logger.info(f"东方财富接口不可用，尝试新浪接口获取 {symbol} 日K数据...")
+    try:
+        sina_symbol = _symbol_to_sina(symbol)
+        df_sina = ak.fund_etf_hist_sina(symbol=sina_symbol)
+        if df_sina is not None and len(df_sina) > 0:
+            df_sina = _normalize_kline_df(df_sina)
+            # 按日期范围过滤
+            df_sina = df_sina[df_sina["date"] >= pd.to_datetime(start_date)]
+            df_sina = df_sina[df_sina["date"] <= pd.to_datetime(end_date)]
+            # 重采样为目标周期
+            if ak_period != "daily":
+                df_sina = _resample_kline(df_sina, period)
+            save_cache(cache_name, df_sina)
+            return df_sina
+    except Exception as e2:
+        logger.warning(f"新浪接口获取 {symbol} 也失败: {e2}")
+
+    if last_error:
+        raise last_error
     return pd.DataFrame()
 
 

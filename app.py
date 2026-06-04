@@ -351,9 +351,9 @@ def tab_detail():
                     st.session_state[f"kline_{code}_{period}"] = df
                     st.success(f"获取到 {len(df)} 根K线")
                 else:
-                    st.error("未获取到数据")
+                    st.error("返回数据为空，请检查ETF代码是否正确")
             except Exception as e:
-                st.error(f"获取失败: {e}")
+                st.error(f"获取失败: {type(e).__name__}: {e}")
 
     cache_key = f"kline_{code}_{period}"
     if cache_key in st.session_state:
