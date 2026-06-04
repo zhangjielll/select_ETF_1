@@ -204,7 +204,12 @@ def fetch_etf_kline(symbol: str, period: str = "周",
     if end_date is None:
         end_date = datetime.now().strftime("%Y%m%d")
 
-    cache_name = f"kline_{symbol}_{period}_{end_date}"
+    # akshare fund_etf_hist_em 需要英文 period 参数
+    period_map = {"日": "daily", "周": "weekly", "月": "monthly",
+                  "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
+    ak_period = period_map.get(period, "weekly")
+
+    cache_name = f"kline_{symbol}_{ak_period}_{end_date}"
     cached = load_cache(cache_name, ttl_hours=CONFIG["CACHE_TTL_HOURS"])
     if cached is not None:
         return cached
@@ -212,7 +217,7 @@ def fetch_etf_kline(symbol: str, period: str = "周",
     for retry in range(CONFIG["MAX_RETRY"] + 1):
         try:
             df = ak.fund_etf_hist_em(
-                symbol=symbol, period=period,
+                symbol=symbol, period=ak_period,
                 start_date=start_date, end_date=end_date, adjust="hfq"
             )
             if df is not None and len(df) > 0:
@@ -221,7 +226,7 @@ def fetch_etf_kline(symbol: str, period: str = "周",
                 return df
         except Exception as e:
             if retry < CONFIG["MAX_RETRY"]:
-                time.sleep(1)
+                time.sleep(2)
     return pd.DataFrame()
 
 
