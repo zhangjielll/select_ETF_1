@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 from scanner_engine import (
     CONFIG, fetch_etf_list, fetch_etf_kline,
-    pre_filter_etf_list, classify_sector,
+    pre_filter_etf_list, classify_sector, get_sector_list,
     calc_macd, calc_rsi, calc_boll, calc_ma, calc_ema,
     check_weekly_macd_golden_cross, check_weekly_volume,
     check_weekly_rsi, check_weekly_boll, check_monthly_ma,
@@ -70,6 +70,24 @@ def render_sidebar():
 
     st.sidebar.markdown("---")
 
+    # ---- 板块选择 ----
+    st.sidebar.subheader("  板块筛选")
+    sector_options = ["全部"]
+    try:
+        etf_list = fetch_etf_list()
+        etf_filtered = pre_filter_etf_list(etf_list)
+        sector_options += get_sector_list(etf_filtered)
+        sector_counts = etf_filtered["sector"].value_counts().to_dict()
+        st.sidebar.caption(f"前置过滤后共 {len(etf_filtered)} 只ETF")
+    except Exception:
+        sector_counts = {}
+
+    selected_sector = st.sidebar.selectbox("选择板块", sector_options)
+    if selected_sector != "全部" and selected_sector in sector_counts:
+        st.sidebar.caption(f"该板块共 {sector_counts[selected_sector]} 只ETF")
+
+    st.sidebar.markdown("---")
+
     # ---- 技术面开关 ----
     st.sidebar.subheader("  技术面筛选开关")
     macd_cross = st.sidebar.checkbox("MACD金叉", CONFIG["MACD_CROSS_ENABLED"])
@@ -87,7 +105,7 @@ def render_sidebar():
         "RSI_FILTER_ENABLED": rsi_filter, "BOLL_FILTER_ENABLED": boll_filter,
         "MONTHLY_MA_ENABLED": monthly_ma, "MACD_ABOVE_ZERO_FILTER": macd_above_zero,
     }
-    return config_override
+    return config_override, selected_sector
 
 
 # ==================================================================================
@@ -260,14 +278,17 @@ def plot_backtest_results(trades_df: pd.DataFrame) -> go.Figure:
 # ==================================================================================
 # Tab 1: 筛选结果
 # ==================================================================================
-def tab_results(config_override):
+def tab_results(config_override, sector=None):
     st.header("  筛选结果")
 
     col1, col2 = st.columns([1, 3])
     with col1:
         run_btn = st.button("  开始筛选", type="primary", use_container_width=True)
     with col2:
-        st.caption("点击运行纯技术面筛选流程（MACD + 放量 + RSI + BOLL + 月K趋势）")
+        if sector and sector != "全部":
+            st.caption(f"当前筛选板块：**{sector}** | MACD + 放量 + RSI + BOLL + 月K趋势")
+        else:
+            st.caption("当前筛选板块：**全部** | MACD + 放量 + RSI + BOLL + 月K趋势")
 
     if run_btn:
         progress_bar = st.progress(0, text="准备开始筛选...")
@@ -277,7 +298,8 @@ def tab_results(config_override):
             progress_bar.progress(pct, text=f"{step}: {cur}/{total}")
 
         with st.spinner("正在执行筛选..."):
-            result = run_scan_engine(config_override, progress_callback=progress_cb)
+            result = run_scan_engine(config_override, sector=sector,
+                                     progress_callback=progress_cb)
 
         progress_bar.progress(1.0, text="筛选完成！")
         st.session_state["scan_result"] = result
@@ -487,12 +509,12 @@ def main():
     st.title("  多周期共振 ETF 右侧交易筛选器")
     st.caption("纯技术指标筛选 | MACD + RSI + BOLL + 均线 + 成交量")
 
-    config_override = render_sidebar()
+    config_override, selected_sector = render_sidebar()
 
     tab1, tab2, tab3 = st.tabs(["  筛选结果", "  个股详情", "  回测报告"])
 
     with tab1:
-        tab_results(config_override)
+        tab_results(config_override, sector=selected_sector)
     with tab2:
         tab_detail()
     with tab3:

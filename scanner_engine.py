@@ -420,6 +420,14 @@ def pre_filter_etf_list(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def get_sector_list(etf_filtered: pd.DataFrame) -> list:
+    """获取板块列表（按ETF数量降序）"""
+    if etf_filtered is None or len(etf_filtered) == 0:
+        return []
+    counts = etf_filtered["sector"].value_counts()
+    return counts.index.tolist()
+
+
 # ==================================================================================
 # 技术面筛选
 # ==================================================================================
@@ -542,9 +550,11 @@ def check_monthly_ma(df_monthly: pd.DataFrame) -> dict:
 # ==================================================================================
 # 主筛选流程（纯技术面）
 # ==================================================================================
-def run_scan_engine(config_override: dict = None, progress_callback=None):
+def run_scan_engine(config_override: dict = None, sector: str = None,
+                    progress_callback=None):
     """
     执行纯技术面筛选流程，返回结果字典
+    sector: 指定板块筛选（如"半导体"、"医药"），None表示全部板块
     """
     cfg = CONFIG.copy()
     if config_override:
@@ -554,6 +564,7 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
         "passed_etfs": [],
         "stats": {},
         "etf_filtered": pd.DataFrame(),
+        "sector_stats": {},
         "weekly_cache": {},
         "monthly_cache": {},
         "log": [],
@@ -581,6 +592,19 @@ def run_scan_engine(config_override: dict = None, progress_callback=None):
     if len(etf_filtered) == 0:
         log("前置过滤后无ETF符合条件")
         return results
+
+    # 板块统计
+    sector_counts = etf_filtered["sector"].value_counts().to_dict()
+    results["sector_stats"] = sector_counts
+    log(f"板块分布：{sector_counts}")
+
+    # 步骤3：板块过滤
+    if sector and sector != "全部":
+        etf_filtered = etf_filtered[etf_filtered["sector"] == sector].copy()
+        log(f"板块筛选「{sector}」后：{len(etf_filtered)} 只ETF")
+        if len(etf_filtered) == 0:
+            log(f"板块「{sector}」内无ETF符合前置条件")
+            return results
 
     # 步骤3：获取K线数据
     codes = etf_filtered["code"].tolist()

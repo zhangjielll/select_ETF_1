@@ -71,12 +71,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_scan(force: bool = False):
+def run_scan(force: bool = False, sector: str = None):
     """运行完整筛选流程"""
     start_time = time.time()
     logger.info("=" * 60)
     logger.info("多周期共振 ETF 右侧交易筛选器（纯技术面）")
     logger.info(f"运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if sector:
+        logger.info(f"筛选板块：{sector}")
+    else:
+        logger.info("筛选板块：全部")
     logger.info("=" * 60)
 
     now = datetime.now()
@@ -94,7 +98,7 @@ def run_scan(force: bool = False):
         if cur % 50 == 0 or cur == total:
             print(f"\r  {step}: {cur}/{total}", end="", flush=True)
 
-    result = run_scan_engine(progress_callback=progress)
+    result = run_scan_engine(sector=sector, progress_callback=progress)
     print()
 
     passed = result["passed_etfs"]
@@ -109,6 +113,12 @@ def run_scan(force: bool = False):
     logger.info(f"  BOLL中轨通过：{stats['boll_pass']}")
     logger.info(f"  月K趋势通过：{stats['monthly_pass']}")
     logger.info(f"  最终入选：{stats['final_pass']}")
+
+    sector_stats = result.get("sector_stats", {})
+    if sector_stats:
+        logger.info("  板块分布：")
+        for s, cnt in sorted(sector_stats.items(), key=lambda x: -x[1]):
+            logger.info(f"    {s}: {cnt}只")
     logger.info("=" * 60)
 
     if not passed:
@@ -136,6 +146,8 @@ def run_scan(force: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="多周期共振ETF右侧交易筛选器")
     parser.add_argument("--force", action="store_true", help="强制运行完整筛选")
+    parser.add_argument("--sector", type=str, default=None,
+                        help="指定板块筛选（如：半导体、医药、宽基、金融等）")
     parser.add_argument("--backtest", nargs=2, metavar=("START", "END"),
                         help="运行回测：--backtest 20230101 20240101")
     args = parser.parse_args()
@@ -184,7 +196,7 @@ def main():
         logger.info(f"回测结果已保存：{csv_path}")
         logger.info(f"运行耗时：{time.time() - start_time:.1f}秒")
     else:
-        run_scan(force=args.force)
+        run_scan(force=args.force, sector=args.sector)
 
 
 if __name__ == "__main__":
