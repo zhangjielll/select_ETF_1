@@ -354,8 +354,209 @@ def tab_results(config_override, sector=None):
 
 
 # ==================================================================================
-# Tab 2: 个股详情
+# Tab 2: 个股详情（含点击K线分析功能）
 # ==================================================================================
+def _format_analysis_text(df: pd.DataFrame, idx: int, period: str) -> str:
+    """根据K线索引生成技术指标分析报告"""
+    close = df["close"]
+    dif, dea, macd_bar = calc_macd(close)
+    rsi = calc_rsi(close)
+    boll_mid, boll_upper, boll_lower = calc_boll(close)
+    ma20 = calc_ma(close, 20) if len(close) >= 20 else None
+    ma60 = calc_ma(close, 60) if len(close) >= 60 else None
+
+    row = df.iloc[idx]
+    date_str = pd.Timestamp(row["date"]).strftime("%Y-%m-%d")
+    price = row["close"]
+    o, h, l, c = row["open"], row["high"], row["low"], row["close"]
+    vol = row.get("volume", None)
+    chg = (c / o - 1) * 100 if o > 0 else 0
+
+    # 前一K线数据
+    prev_close = df["close"].iloc[idx - 1] if idx > 0 else None
+    prev_dif = dif.iloc[idx - 1] if idx > 0 and not pd.isna(dif.iloc[idx - 1]) else None
+    prev_dea = dea.iloc[idx - 1] if idx > 0 and not pd.isna(dea.iloc[idx - 1]) else None
+
+    curr_dif = dif.iloc[idx] if not pd.isna(dif.iloc[idx]) else None
+    curr_dea = dea.iloc[idx] if not pd.isna(dea.iloc[idx]) else None
+    curr_macd = macd_bar.iloc[idx] if not pd.isna(macd_bar.iloc[idx]) else None
+    curr_rsi = rsi.iloc[idx] if not pd.isna(rsi.iloc[idx]) else None
+    curr_boll_mid = boll_mid.iloc[idx] if not pd.isna(boll_mid.iloc[idx]) else None
+    curr_boll_upper = boll_upper.iloc[idx] if not pd.isna(boll_upper.iloc[idx]) else None
+    curr_boll_lower = boll_lower.iloc[idx] if not pd.isna(boll_lower.iloc[idx]) else None
+
+    lines = []
+    lines.append(f"##   {date_str} ({period}K) 技术指标分析")
+    lines.append("")
+
+    # K线形态
+    lines.append("###   K线形态")
+    body = abs(c - o)
+    upper_shadow = h - max(c, o)
+    lower_shadow = min(c, o) - l
+    amplitude = (h - l) / o * 100 if o > 0 else 0
+
+    if c > o:
+        lines.append(f"- **阳线** | 开盘={o:.3f} 收盘={c:.3f} 最高={h:.3f} 最低={l:.3f}")
+    else:
+        lines.append(f"- **阴线** | 开盘={o:.3f} 收盘={c:.3f} 最高={h:.3f} 最低={l:.3f}")
+    lines.append(f"- 涨跌幅: **{chg:+.2f}%** | 振幅: {amplitude:.2f}%")
+
+    if prev_close:
+        pct = (c / prev_close - 1) * 100
+        lines.append(f"- 相对前一K线: {pct:+.2f}%")
+
+    # K线形态判断
+    if body > 0 and lower_shadow > 2 * body and upper_shadow < body * 0.3:
+        lines.append("-   **锤子线**（下影线长，可能见底反转）")
+    elif body > 0 and upper_shadow > 2 * body and lower_shadow < body * 0.3:
+        lines.append("-   **射击之星**（上影线长，可能见顶反转）")
+    elif body < (h - l) * 0.1:
+        lines.append("-   **十字星**（多空胶着，可能变盘）")
+    if vol is not None and idx > 0:
+        prev_vol = df["volume"].iloc[idx - 1] if "volume" in df.columns else None
+        if prev_vol and prev_vol > 0:
+            vol_ratio = vol / prev_vol
+            if vol_ratio > 2:
+                lines.append(f"-   **明显放量**（量比={vol_ratio:.2f}）")
+            elif vol_ratio > 1.5:
+                lines.append(f"-   **温和放量**（量比={vol_ratio:.2f}）")
+            elif vol_ratio < 0.5:
+                lines.append(f"-   **明显缩量**（量比={vol_ratio:.2f}）")
+    lines.append("")
+
+    # MACD
+    lines.append("###   MACD指标")
+    if curr_dif is not None and curr_dea is not None and curr_macd is not None:
+        lines.append(f"- DIF: **{curr_dif:.4f}** | DEA: **{curr_dea:.4f}** | MACD柱: **{curr_macd:.4f}**")
+        if curr_dif > curr_dea:
+            lines.append("- DIF > DEA → **多头排列**")
+        else:
+            lines.append("- DIF < DEA → **空头排列**")
+        if curr_macd > 0:
+            lines.append("- MACD红柱 → 多方动能")
+        else:
+            lines.append("- MACD绿柱 → 空方动能")
+
+        # 金叉/死叉判断
+        if prev_dif is not None and prev_dea is not None:
+            if curr_dif > curr_dea and prev_dif <= prev_dea:
+                lines.append("-   **MACD金叉！**（DIF上穿DEA，看多信号）")
+            elif curr_dif < curr_dea and prev_dif >= prev_dea:
+                lines.append("-   **MACD死叉！**（DIF下穿DEA，看空信号）")
+
+        # 零轴位置
+        if curr_dif > 0 and curr_dea > 0:
+            lines.append("- DIF/DEA均在零轴上方 → **强势区域**")
+        elif curr_dif < 0 and curr_dea < 0:
+            lines.append("- DIF/DEA均在零轴下方 → **弱势区域**")
+    else:
+        lines.append("- 数据不足，无法计算")
+    lines.append("")
+
+    # RSI
+    lines.append("###   RSI指标")
+    if curr_rsi is not None:
+        lines.append(f"- RSI(14): **{curr_rsi:.1f}**")
+        if curr_rsi > 80:
+            lines.append("-   **超买区间**（>80），注意回调风险")
+        elif curr_rsi > 70:
+            lines.append("-   **偏强区间**（>70），接近超买")
+        elif curr_rsi > 50:
+            lines.append("-   **多头区间**（50-70），趋势偏多")
+        elif curr_rsi > 30:
+            lines.append("-   **空头区间**（30-50），趋势偏空")
+        elif curr_rsi > 20:
+            lines.append("-   **偏弱区间**（<30），接近超卖")
+        else:
+            lines.append("-   **超卖区间**（<20），可能存在反弹机会")
+    else:
+        lines.append("- 数据不足，无法计算")
+    lines.append("")
+
+    # BOLL
+    lines.append("###   布林带")
+    if curr_boll_mid is not None and curr_boll_upper is not None and curr_boll_lower is not None:
+        lines.append(f"- 上轨: **{curr_boll_upper:.3f}** | 中轨: **{curr_boll_mid:.3f}** | 下轨: **{curr_boll_lower:.3f}**")
+        boll_width = (curr_boll_upper - curr_boll_lower) / curr_boll_mid * 100
+        lines.append(f"- 带宽: {boll_width:.2f}%")
+        if price >= curr_boll_upper:
+            lines.append("-   **触及上轨**，可能面临压力")
+        elif price > curr_boll_mid:
+            lines.append("- ✅ **中轨上方运行**，趋势偏多")
+        elif price > curr_boll_lower:
+            lines.append("-   **中轨下方运行**，趋势偏空")
+        else:
+            lines.append("-   **触及下轨**，可能存在支撑")
+        if boll_width < 5:
+            lines.append("-   **布林带收窄**，可能即将出现大幅波动")
+    else:
+        lines.append("- 数据不足，无法计算")
+    lines.append("")
+
+    # 均线
+    lines.append("###   均线系统")
+    ma_checks = []
+    if ma20 is not None:
+        val = ma20.iloc[idx] if not pd.isna(ma20.iloc[idx]) else None
+        if val is not None:
+            above = price > val
+            lines.append(f"- MA20: **{val:.3f}** ({'站上' if above else '跌破'})")
+            ma_checks.append(above)
+    if ma60 is not None:
+        val = ma60.iloc[idx] if not pd.isna(ma60.iloc[idx]) else None
+        if val is not None:
+            above = price > val
+            lines.append(f"- MA60: **{val:.3f}** ({'站上' if above else '跌破'})")
+            ma_checks.append(above)
+    if ma20 is not None and ma60 is not None:
+        v20 = ma20.iloc[idx] if not pd.isna(ma20.iloc[idx]) else None
+        v60 = ma60.iloc[idx] if not pd.isna(ma60.iloc[idx]) else None
+        if v20 is not None and v60 is not None:
+            if v20 > v60:
+                lines.append("- MA20 > MA60 → **均线多头排列**")
+            else:
+                lines.append("- MA20 < MA60 → **均线空头排列**")
+    if not ma_checks:
+        lines.append("- 均线数据不足")
+    lines.append("")
+
+    # 综合判断
+    lines.append("###   综合判断")
+    bull_signals = 0
+    bear_signals = 0
+    if curr_dif is not None and curr_dea is not None:
+        if curr_dif > curr_dea: bull_signals += 1
+        else: bear_signals += 1
+    if curr_rsi is not None:
+        if curr_rsi > 50: bull_signals += 1
+        else: bear_signals += 1
+    if curr_boll_mid is not None:
+        if price > curr_boll_mid: bull_signals += 1
+        else: bear_signals += 1
+    if ma_checks:
+        if all(ma_checks): bull_signals += 1
+        elif not any(ma_checks): bear_signals += 1
+
+    total = bull_signals + bear_signals
+    if total > 0:
+        bull_pct = bull_signals / total * 100
+        if bull_pct >= 80:
+            lines.append(f"-   **强烈看多**（多头信号 {bull_signals}/{total}）")
+        elif bull_pct >= 60:
+            lines.append(f"-   **偏多**（多头信号 {bull_signals}/{total}）")
+        elif bull_pct >= 40:
+            lines.append(f"-   **中性**（多头 {bull_signals} / 空头 {bear_signals}）")
+        elif bull_pct >= 20:
+            lines.append(f"-   **偏空**（空头信号 {bear_signals}/{total}）")
+        else:
+            lines.append(f"-   **强烈看空**（空头信号 {bear_signals}/{total}）")
+    lines.append("")
+    lines.append("> ⚠️ 以上分析仅基于技术指标，不构成投资建议。请结合基本面、市场情绪等综合判断。")
+
+    return "\n".join(lines)
+
+
 def tab_detail():
     st.header("  个股详情")
 
@@ -388,11 +589,63 @@ def tab_detail():
         show_boll = c3.checkbox("BOLL", True)
         show_volume = c4.checkbox("成交量", True)
 
+        # 选中的K线索引（通过滑块或点击选择）
+        select_key = f"selected_idx_{code}_{period}"
+        if select_key not in st.session_state:
+            st.session_state[select_key] = len(df) - 1
+
         fig = plot_kline_with_indicators(df, title=f"{code} {period}K线",
                                           show_macd=show_macd, show_rsi=show_rsi,
                                           show_boll=show_boll, show_volume=show_volume)
-        st.plotly_chart(fig, use_container_width=True)
 
+        # 使用 on_select 捕获点击事件
+        event = st.plotly_chart(fig, use_container_width=True, on_select="rerun",
+                                selection_mode=["points"])
+
+        # 处理点击事件：更新选中的K线索引
+        if event and hasattr(event, "selection") and event.selection:
+            points = event.selection.get("points", [])
+            if points:
+                point = points[0]
+                # 从点击的日期反推K线索引
+                clicked_x = point.get("x", None)
+                if clicked_x is not None:
+                    clicked_date = pd.to_datetime(clicked_x)
+                    match = df[df["date"] == clicked_date]
+                    if len(match) > 0:
+                        st.session_state[select_key] = match.index[0]
+
+        # K线选择器（滑块 + 日期显示）
+        st.markdown("---")
+        st.subheader("  选择K线进行分析")
+        st.caption("点击上方K线图中的蜡烛图可选中该K线，也可用下方滑块选择")
+
+        idx = st.slider(
+            "选择K线索引",
+            min_value=0, max_value=len(df) - 1,
+            value=st.session_state[select_key],
+            key=f"slider_{code}_{period}",
+            format="%d",
+        )
+        st.session_state[select_key] = idx
+
+        selected_date = pd.Timestamp(df.iloc[idx]["date"]).strftime("%Y-%m-%d")
+        selected_close = df.iloc[idx]["close"]
+        st.info(f"已选中: **{selected_date}** | 收盘价: **{selected_close:.3f}**")
+
+        # 分析按钮
+        if st.button("  分析该K线技术指标", type="primary", use_container_width=True):
+            analysis = _format_analysis_text(df, idx, period)
+            st.session_state[f"analysis_{code}_{period}"] = analysis
+
+        # 显示分析结果
+        analysis_key = f"analysis_{code}_{period}"
+        if analysis_key in st.session_state:
+            st.markdown("---")
+            st.markdown(st.session_state[analysis_key])
+
+        # 最新指标值
+        st.markdown("---")
         st.subheader("  最新指标值")
         close = df["close"]
         dif, dea, macd_bar = calc_macd(close)
